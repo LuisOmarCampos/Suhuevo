@@ -26,7 +26,6 @@ class AuthService {
    */
   async login(body: any, locals: any, session: any): Promise<any> {
     customLog("🛠️ Iniciando autenticación para:", body.email);
-    const userName = body.email;
 
     try {
       if (!body.email || !body.password) {
@@ -38,7 +37,7 @@ class AuthService {
         });
       }
 
-      const user = await UserModel.findOne({ userName, active: true }, null, { session });
+      const user = await UserModel.findOne({ userName: body.email, active: true }, null, { session });
 
       if (!user) {
         throw new AppErrorResponse({
@@ -59,7 +58,16 @@ class AuthService {
       }
 
       customLog("✅ Autenticación exitosa. Generando token...");
+
+      // Generar nuevos tokens
       const { token, refreshToken, expiresIn, refreshExpiresIn } = await generateUserToken(user);
+
+      // 🔍 Buscar si ya existe un token de refresco para este usuario
+      await RefreshTokenModel.findOneAndUpdate(
+        { userId: user._id }, // Si ya existe un refreshToken para este usuario, lo actualiza
+        { token: refreshToken, expiresAt: new Date(Date.now() + refreshExpiresIn * 1000) },
+        { upsert: true, new: true } // Si no existe, lo crea
+      );
 
       return { token, refreshToken, expiresIn, refreshExpiresIn };
     } catch (error) {
@@ -67,6 +75,7 @@ class AuthService {
       throw error;
     }
   }
+
 
 
   /**
@@ -80,6 +89,7 @@ class AuthService {
     try {
       customLog("🔍 Verificando Refresh Token...");
 
+      // ✅ 1. Verificar si el token es válido
       let decoded: JwtPayload;
       try {
         decoded = verify(refreshToken, process.env.JWT_REFRESH_SECRET || "refreshsupersecreto") as JwtPayload;
@@ -88,26 +98,28 @@ class AuthService {
         throw new AppErrorResponse({ statusCode: 401, name: "Refresh token inválido o expirado" });
       }
 
+      // ✅ 2. Buscar el Refresh Token en la BD específico de esta sesión
       customLog("🔍 Buscando token en la base de datos...");
-      const storedToken = await RefreshTokenModel.findOne({ userId: decoded.id, token: refreshToken }).session(session);
+      const storedToken = await RefreshTokenModel.findOne({ token: refreshToken }).session(session);
 
       if (!storedToken) {
         throw new AppErrorResponse({ statusCode: 403, name: "Refresh token no encontrado en la base de datos" });
       }
 
+      // ✅ 3. Eliminar solo el refreshToken actual antes de generar uno nuevo
+      customLog("🔥 Eliminando refresh token anterior...");
+      await RefreshTokenModel.deleteOne({ token: refreshToken }).session(session);
+
+      // ✅ 4. Buscar el usuario en la BD
+      customLog("✅ Token válido. Buscando usuario...");
       const user = await UserModel.findById(decoded.id).session(session);
       if (!user) {
         throw new AppErrorResponse({ statusCode: 403, name: "Usuario no encontrado" });
       }
 
+      // ✅ 5. Generar nuevos tokens
       customLog("🔄 Generando nuevo token...");
       const { token, refreshToken: newRefreshToken, expiresIn, refreshExpiresIn } = await generateUserToken(user);
-
-      await RefreshTokenModel.findOneAndUpdate(
-        { userId: user._id, token: refreshToken },
-        { token: newRefreshToken, expiresAt: new Date(Date.now() + refreshExpiresIn * 1000) },
-        { upsert: true, new: true, session, maxTimeMS: 15000 }
-      );
 
       return { token, refreshToken: newRefreshToken, expiresIn, refreshExpiresIn };
     } catch (error) {
@@ -117,14 +129,25 @@ class AuthService {
   }
 
 
+
+
+
   /**
    * Cerrar sesión y eliminar Refresh Token
    */
   async logout(refreshToken: string) {
-    customLog("Token Recibido", refreshToken)
-    await RefreshTokenModel.findOneAndDelete({ token: refreshToken });
+    customLog("🔴 Cerrando sesión para el token:", refreshToken);
+
+    // 🔥 Eliminar solo el refreshToken actual de la base de datos
+    const deleted = await RefreshTokenModel.deleteOne({ token: refreshToken });
+
+    if (deleted.deletedCount === 0) {
+      throw new AppErrorResponse({ statusCode: 400, name: "Token no válido o ya eliminado" });
+    }
+
     return { message: "Sesión cerrada exitosamente" };
   }
+
 
   /**
    * Enviar correo para restablecer contraseña

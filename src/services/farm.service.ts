@@ -307,7 +307,7 @@ class FarmService {
           shed: shed._id,
           createdAt: { $gte: weekStart, $lte: weekEnd },
         })
-          .select("totalEggs totalNetWeight")
+          .select("totalEggs netWeight")
           .lean();
 
         // 🔹 Sumar producción de cajas y huevos

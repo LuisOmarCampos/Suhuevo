@@ -263,12 +263,7 @@ class ShedService {
     customLog(`📆 Fecha de captura: ${captureDay.toISOString()}`);
     customLog(`🗓️ Semana administrativa: ${weekStart.toISOString()} - ${weekEnd.toISOString()}`);
 
-
     if (captureDay < weekStart || captureDay > weekEnd) {
-      console.log(`🚨 ERROR: La fecha ${captureDay.toISOString()} está fuera del rango válido.`);
-      console.log(`   📆 Fecha de captura: ${captureDay.toISOString()}`);
-      console.log(`   🗓️ Semana administrativa: ${weekStart.toISOString()} - ${weekEnd.toISOString()}`);
-
       throw new AppErrorResponse({
         statusCode: 400,
         name: "InvalidCaptureDate",
@@ -282,13 +277,13 @@ class ShedService {
       throw new AppErrorResponse({
         statusCode: 404,
         name: "ShedNotFound",
-        message: "Caseta no encontrada."
+        message: "Caseta no encontrada.",
       });
     }
 
     customLog(`🏠 Caseta encontrada: ${shed.name} - Initial Hens Count: ${shed.initialHensCount}`);
 
-    // 🔹 Sumar toda la mortalidad acumulada antes de captureDate
+    // 🔹 Obtener la mortalidad acumulada antes de la fecha de captura
     const previousMortality = await DailyRecordModel.aggregate([
       { $match: { shedId: new Types.ObjectId(shedId), date: { $lt: captureDay } } },
       { $group: { _id: null, totalMortality: { $sum: "$mortality" } } }
@@ -297,58 +292,53 @@ class ShedService {
       .exec();
 
     const totalPreviousMortality = previousMortality.length ? previousMortality[0].totalMortality : 0;
-    customLog(`☠️ Mortalidad previa acumulada: ${totalPreviousMortality}`);
-
-    // 🔹 Cálculo de gallinas vivas
     const hensAlive = Math.max(shed.initialHensCount - totalPreviousMortality - dailyData.mortality, 0);
-    customLog(`🐔 Gallinas vivas después de mortalidad actual: ${hensAlive}`);
 
-    // 🔍 Depuración: Verifica que shedId es un ObjectId válido
-    const shedObjectId = new Types.ObjectId(shedId);
-    customLog(`🔍 Buscando códigos en box-production con shedId: ${shedObjectId} y fecha: ${captureDay}`);
-
-    // 🔹 Consultar producción de cajas del día en `box-production`
+    // 🔍 Buscar producción de cajas y huevos del día
     const boxProductionRecords = await BoxProductionModel.find({
-      shed: shedObjectId, // ✅ Usar el campo correcto "shed"
-      createdAt: {
-        $gte: new Date(captureDay.setUTCHours(0, 0, 0, 0)), // Desde el inicio del día
-        $lt: new Date(captureDay.setUTCHours(23, 59, 59, 999)) // Hasta el final del día
-      },
-      status: { $ne: 99 } // Filtrar códigos con estado diferente a 99
+      shed: shedId,
+      createdAt: { $gte: new Date(captureDay.setUTCHours(0, 0, 0, 0)), $lt: new Date(captureDay.setUTCHours(23, 59, 59, 999)) },
+      status: { $ne: 99 },
     })
       .select("totalEggs netWeight")
       .session(session)
       .lean();
 
-    customLog(`📦 Registros de producción encontrados: ${boxProductionRecords.length}`);
-
     // 🔹 Calcular producción de huevos y cajas
     const producedBoxes = boxProductionRecords.length;
     const totalProducedEggs = boxProductionRecords.reduce((sum, record) => sum + record.totalEggs.valueOf(), 0);
     const totalNetWeight = boxProductionRecords.reduce((sum, record) => sum + record.netWeight, 0);
-
-
-    customLog(`🥚 Total huevos producidos: ${totalProducedEggs}`);
-    customLog(`📦 Total cajas producidas: ${producedBoxes}`);
-    customLog(`⚖️ Peso neto total de huevos: ${totalNetWeight}`);
-
-    // 🔹 Calcular peso promedio del huevo
     const avgEggWeight = totalProducedEggs > 0 ? totalNetWeight / totalProducedEggs : 0;
-    customLog(`📊 Peso promedio del huevo: ${avgEggWeight.toFixed(2)}`);
 
+    // 🔹 Buscar si ya existe un registro diario
     let record = await DailyRecordModel.findOne({ shedId, date: captureDay }).session(session).exec();
+    let previousData = {
+      foodConsumedKg: 0,
+      mortality: 0,
+      producedEggs: 0,
+      producedBoxes: 0,
+      avgEggWeight: 0,
+    };
 
     if (record) {
       customLog(`✏️ Actualizando registro diario existente.`);
+      previousData = {
+        foodConsumedKg: record.foodConsumedKg,
+        mortality: record.mortality,
+        producedEggs: record.producedEggs,
+        producedBoxes: record.producedBoxes,
+        avgEggWeight: record.avgEggWeight,
+      };
+
       record.set({
         ...dailyData,
-        producedEgss: totalProducedEggs,
+        producedEggs: totalProducedEggs,
         producedBoxes: producedBoxes,
         avgEggWeight,
         totalNetWeight,
-        hensAlive: hensAlive,
-        updateBy: user
-      })
+        hensAlive,
+        updateBy: user,
+      });
       await record.save({ validateBeforeSave: true, session });
     } else {
       customLog(`🆕 Creando nuevo registro diario.`);
@@ -361,14 +351,14 @@ class ShedService {
         producedBoxes: producedBoxes,
         avgEggWeight,
         totalNetWeight,
-        hensAlive: hensAlive,
+        hensAlive,
         createdBy: user,
         updatedBy: user,
       });
       await record.save({ validateBeforeSave: true, session });
     }
 
-    // 📌 **ACTUALIZAR O CREAR WeeklyRecord**
+    // 📌 **Actualizar WeeklyRecord sin duplicar valores**
     let weeklyRecord = await WeeklyRecordModel.findOne({
       shedId: shedId,
       weekStart: weekStart,
@@ -377,7 +367,6 @@ class ShedService {
 
     if (!weeklyRecord) {
       customLog(`🆕 Creando nuevo registro semanal.`);
-      // 🆕 Si no existe un registro semanal, crearlo con los datos actuales
       weeklyRecord = new WeeklyRecordModel({
         shedId,
         weekStart: weekStart,
@@ -390,17 +379,17 @@ class ShedService {
         totalNetWeight,
         avgEggWeight,
         avgHensWeight: dailyData.avgHensWeight,
-        generationId: shed.generationId
+        generationId: shed.generationId,
       });
     } else {
-      // 🔄 **Actualizar el WeeklyRecord sumando los datos diarios**
-      customLog(`🔄 Actualizando registro semanal.`);
-      weeklyRecord.totalHensAlive = hensAlive;
-      weeklyRecord.totalFoodConsumedKg += dailyData.foodConsumedKg;
-      weeklyRecord.totalProducedBoxes += producedBoxes;
-      weeklyRecord.totalProducedEggs += totalProducedEggs;
-      weeklyRecord.totalMortality += dailyData.mortality;
-      weeklyRecord.totalNetWeight = totalNetWeight;
+      customLog(`🔄 Ajustando datos en el registro semanal.`);
+
+      // 📌 Restar los valores anteriores antes de actualizar
+      weeklyRecord.totalFoodConsumedKg += dailyData.foodConsumedKg - previousData.foodConsumedKg;
+      weeklyRecord.totalMortality += dailyData.mortality - previousData.mortality;
+      weeklyRecord.totalProducedBoxes += producedBoxes - previousData.producedBoxes;
+      weeklyRecord.totalProducedEggs += totalProducedEggs - previousData.producedEggs;
+      weeklyRecord.totalNetWeight += totalNetWeight - (previousData.avgEggWeight * previousData.producedEggs);
       weeklyRecord.avgEggWeight = avgEggWeight;
       weeklyRecord.avgHensWeight = dailyData.avgHensWeight;
     }
@@ -410,6 +399,7 @@ class ShedService {
     customLog(`✅ Captura de datos diaria finalizada.`);
     return record;
   }
+
 
   /**
    * 📊 Obtiene el historial de todas las generaciones de una caseta

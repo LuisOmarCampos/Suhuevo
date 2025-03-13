@@ -93,6 +93,7 @@ export interface IDailyRecord extends Document {
   producedBoxes: number;
   producedEggs: number;
   mortality: number;
+  uniformity: number;
   totalNetWeight: number;
   avgEggWeight: number;
   avgHensWeight: number;
@@ -136,6 +137,7 @@ const DailyRecordSchema = new Schema<IDailyRecord>(
     producedBoxes: { type: Number },
     producedEggs: { type: Number },
     mortality: { type: Number, required: true },
+    uniformity: { type: Number },
     totalNetWeight: { type: Number, required: true, default: 0 },
     avgEggWeight: { type: Number },
     avgHensWeight: { type: Number, required: true },

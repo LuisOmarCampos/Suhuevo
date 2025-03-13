@@ -1,4 +1,4 @@
-import { Schema, AppMainMongooseRepo } from '@app/repositories/mongoose'
+import { Schema, AppMainMongooseRepo } from "@app/repositories/mongoose";
 
 export interface IRefreshToken extends Document {
   userId: Schema.Types.ObjectId;
@@ -6,13 +6,16 @@ export interface IRefreshToken extends Document {
   expiresAt: Date;
 }
 
-export const RefreshTokenSchema = new Schema<IRefreshToken>(
+const RefreshTokenSchema = new Schema<IRefreshToken>(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    token: { type: String, required: true, unique: true },
-    expiresAt: { type: Date, required: true },
+    token: { type: String, required: true },
+    expiresAt: { type: Date, required: true }
   },
   { timestamps: true }
 );
+
+RefreshTokenSchema.index({ userId: 1, token: 1 }, { unique: false });
+
 
 export const RefreshTokenModel = AppMainMongooseRepo.model<IRefreshToken>("RefreshToken", RefreshTokenSchema);
