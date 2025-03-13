@@ -10,12 +10,18 @@ import { v4 as uuidv4 } from 'uuid'
 
 class DepartmentService {
   async get (query: any): Promise<any> {
+    if (!query.ids) {
+      customLog('[DepartmentService.get] No se enviaron IDs, devolviendo todos los departamentos.');
+      return await DepartmentModel.find({ active: true });
+    }
+    
     const ids = Array.isArray(query.ids) ? query.ids : [query.ids]
     const records = await DepartmentModel.find({ active: true, id: { $in: ids } })
 
-    const result: any = {}
-    for (const record of records) result[record.id] = record
-    return result
+    return records.reduce((acc: Record<string, IDepartment>, record) => {
+          acc[record.id] = record;
+          return acc;
+        }, {});
   }
 
   async search (query: any): Promise<any> {
