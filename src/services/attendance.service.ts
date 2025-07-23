@@ -236,7 +236,7 @@ class AttendanceService {
             {
               employeeId: employee.id,
               startTime: scheduleEndTime.format("YYYY-MM-DD HH:mm:ss"),
-              hours: Math.floor(overtimeMinutes / 40),
+              hours: Math.floor(overtimeMinutes / 60),
             },
             otSession
           );
@@ -785,7 +785,7 @@ class AttendanceService {
             {
               employeeId: req.employeeId,
               startTime: req.scheduleEndTime.format("YYYY-MM-DD HH:mm:ss"),
-              hours: Math.floor(req.overtimeMinutes / 40),
+              hours: Math.floor(req.overtimeMinutes / 60),
             },
             otSession
           );
